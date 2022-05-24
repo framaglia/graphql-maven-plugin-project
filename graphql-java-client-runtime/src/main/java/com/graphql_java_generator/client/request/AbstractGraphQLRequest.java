@@ -710,9 +710,17 @@ public abstract class AbstractGraphQLRequest {
 			ret.put("variables", payload.variables);
 		}
 
+		if (payload.variables.isEmpty() && !params.isEmpty()) {
+			ret.put("variables", params);
+		}
+
 		// Step 3: add the operationName
 		if (payload.operationName != null) {
 			ret.put("operationName", StringEscapeUtils.escapeJson(payload.operationName));
+		}
+
+		if (params.containsKey("auth")) {
+			ret.put("auth", params.get("auth"));
 		}
 
 		return ret;

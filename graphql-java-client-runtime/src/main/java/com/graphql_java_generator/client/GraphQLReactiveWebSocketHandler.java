@@ -49,14 +49,16 @@ public class GraphQLReactiveWebSocketHandler implements WebSocketHandler {
 	/** Logger for this class */
 	private static Logger logger = LoggerFactory.getLogger(GraphQLReactiveWebSocketHandler.class);
 
-	private static final List<String> SUB_PROTOCOL_LIST = Arrays.asList("graphql-transport-ws");
-
 	public enum MessageType {
 		CONNECTION_INIT("connection_init"), CONNECTION_ACK("connection_ack"), SUBSCRIBE("subscribe"), NEXT(
 				"next"), ERROR("error"), COMPLETE("complete"),
 		// graphiql seems to send a START message, instead of a SUBSCRIBE one :(
 		// Let's add it ot this list
-		START("start");
+		START("start"),
+
+		//Cable Protocol
+		WELCOME("welcome"), PING("ping"), MESSAGE("message"),
+		CONFIRM_SUBSCRIPTION("confirm_subscription"), REJECT_SUBSCRIPTION("reject_subscription");
 
 		private static final Map<String, MessageType> messageTypes = new HashMap<>(6);
 
@@ -429,7 +431,7 @@ public class GraphQLReactiveWebSocketHandler implements WebSocketHandler {
 				subData.uniqueIdOperation, session, request);
 
 		webSocketEmitter.emit(subData,
-				session.textMessage(encode(subData.uniqueIdOperation, MessageType.SUBSCRIBE, subData.request)));
+				session.textMessage(encode(MessageType.SUBSCRIBE, subData.request)));
 
 		return subData.uniqueIdOperation;
 	}
@@ -628,77 +630,87 @@ public class GraphQLReactiveWebSocketHandler implements WebSocketHandler {
 		}
 
 		switch (messageType) {
-		case CONNECTION_ACK:
-			logger.trace("Received 'connection_ack' on web socket {}", session);
-			// Ok, the connectionInit message has been sent. It's now allowed to send GraphQL
-			// subscription on this web socket (see #executeSubscription() in this class)
-			webSocketConnectionInitializationLatch.countDown();
-			break;
-		case NEXT:
-			if (logger.isTraceEnabled())
-				logger.trace("Received 'next' for id {} on web socket {} (payload={})", id, session,
-						message.getPayloadAsText());
-			if (id == null) {
-				// Invalid message. We close the whole session, as described in the protocol
-				GraphQlStatus.closeSession(this, session, GraphQlStatus.INVALID_MESSAGE_STATUS,
-						"Invalid message (id is null): " + message.getPayloadAsText());
-				return;
-			}
+			case WELCOME:
+			case CONNECTION_ACK:
+				logger.trace("Received 'connection_ack' on web socket {}", session);
+				// Ok, the connectionInit message has been sent. It's now allowed to send GraphQL
+				// subscription on this web socket (see #executeSubscription() in this class)
+				webSocketConnectionInitializationLatch.countDown();
+				break;
+			case MESSAGE:
+			case NEXT:
+				if (logger.isTraceEnabled())
+					logger.trace("Received 'next' for id {} on web socket {} (payload={})", id, session,
+							message.getPayloadAsText());
+				if (id == null) {
+					// Invalid message. We close the whole session, as described in the protocol
+					GraphQlStatus.closeSession(this, session, GraphQlStatus.INVALID_MESSAGE_STATUS,
+							"Invalid message (id is null): " + message.getPayloadAsText());
+					return;
+				}
 
-			if (subData == null) {
-				// Oups! The server sent a message with a uniqueIdOperation that is unknown by the client
-				// There is nothing in the protocol for this case...
-				// We ignore this message, and mark this unknown uniqueIdOperation as complete so that we receive no
-				// other message for this uniqueIdOperation
-				logger.warn(
-						"[graphql-transport-ws] Unknown uniqueIdOperation {} for web socket session {} (a 'complete' message is sent to the server to that he stops managing this uniqueIdOperation)",
-						id, session);
-				webSocketEmitter.emit(subData, session.textMessage(encode(id, MessageType.COMPLETE, null)));
-			} else if (subData.isCompleted()) {
-				logger.warn("Receive a message for a closed uniqueIdOperation ({}) on web socket {}", id, session);
-			} else if (map.get("payload") == null) {
-				String msg = "payload is mandatory for 'next' messages";
-				logger.error(msg);
-				subData.onError(new GraphQLRequestExecutionException(msg));
-			} else if (!(map.get("payload") instanceof Map)) {
-				String msg = "payload should be a Map, but <" + map.get("payload") + "> is not a Map";
-				logger.error(msg);
-				subData.onError(new GraphQLRequestExecutionException(msg));
-			} else {
-				subData.onNext((Map<String, Object>) map.get("payload"));
-			}
-			break;
-		case COMPLETE:
-			logger.trace("Received 'complete' for id {} on web socket {} (payload={})", id, session, message);
-			subData.onComplete();
-			break;
-		case ERROR:
-			logger.warn("Received 'error' for id {} on web socket {} (payload={})", id, session,
-					message.getPayloadAsText());
-			// The payload is a list of GraphQLErrors
-			if (map.get("payload") instanceof Map) {
-				// The payload is one error
-				String msg = (String) ((Map<?, ?>) map.get("payload")).get("message");
-				subData.onError(new GraphQLRequestExecutionException(msg));
-			} else {
-				// The payload is a list of errors
-				List<Map<String, Object>> errors = (List<Map<String, Object>>) map.get("payload");
-				List<String> errorMessages = errors.stream().map(e -> (String) e.get("message"))
-						.collect(Collectors.toList());
-				subData.onError(new GraphQLRequestExecutionException(errorMessages));
-			}
-			break;
-		default:
-			logger.warn("Received non managed message '{}' for id {} on web socket {} (payload={})", type, id, session,
-					message);
-			// Oups! This message type exists in MessageType, but is not properly managed here.
-			// This is an internal error.
-			String msg = "Non managed message type '" + type + "'";
-			if (subData != null) {
-				subData.onError(new GraphQLRequestExecutionException(msg));
-			} else {
-				logger.error(msg);
-			}
+				if (subData == null) {
+					// Oups! The server sent a message with a uniqueIdOperation that is unknown by the client
+					// There is nothing in the protocol for this case...
+					// We ignore this message, and mark this unknown uniqueIdOperation as complete so that we receive no
+					// other message for this uniqueIdOperation
+					logger.warn(
+							"[graphql-transport-ws] Unknown uniqueIdOperation {} for web socket session {} (a 'complete' message is sent to the server to that he stops managing this uniqueIdOperation)",
+							id, session);
+					webSocketEmitter.emit(subData, session.textMessage(encode(id, MessageType.COMPLETE, null)));
+				} else if (subData.isCompleted()) {
+					logger.warn("Receive a message for a closed uniqueIdOperation ({}) on web socket {}", id, session);
+				} else if (map.get("payload") == null) {
+					String msg = "payload is mandatory for 'next' messages";
+					logger.error(msg);
+					subData.onError(new GraphQLRequestExecutionException(msg));
+				} else if (!(map.get("payload") instanceof Map)) {
+					String msg = "payload should be a Map, but <" + map.get("payload") + "> is not a Map";
+					logger.error(msg);
+					subData.onError(new GraphQLRequestExecutionException(msg));
+				} else {
+					subData.onNext((Map<String, Object>) map.get("payload"));
+				}
+				break;
+			case COMPLETE:
+				logger.trace("Received 'complete' for id {} on web socket {} (payload={})", id, session, message);
+				subData.onComplete();
+				break;
+			case CONFIRM_SUBSCRIPTION:
+				logger.info("Confirmed subscription to {}", message);
+				break;
+			case REJECT_SUBSCRIPTION:
+				logger.warn("Rejected subscription to {}", message);
+			case PING:
+				logger.debug("Ping received {}", message.getPayloadAsText());
+				break;
+			case ERROR:
+				logger.warn("Received 'error' for id {} on web socket {} (payload={})", id, session,
+						message.getPayloadAsText());
+				// The payload is a list of GraphQLErrors
+				if (map.get("payload") instanceof Map) {
+					// The payload is one error
+					String msg = (String) ((Map<?, ?>) map.get("payload")).get("message");
+					subData.onError(new GraphQLRequestExecutionException(msg));
+				} else {
+					// The payload is a list of errors
+					List<Map<String, Object>> errors = (List<Map<String, Object>>) map.get("payload");
+					List<String> errorMessages = errors.stream().map(e -> (String) e.get("message"))
+							.collect(Collectors.toList());
+					subData.onError(new GraphQLRequestExecutionException(errorMessages));
+				}
+				break;
+			default:
+				logger.warn("Received non managed message '{}' for id {} on web socket {} (payload={})", type, id, session,
+						message);
+				// Oups! This message type exists in MessageType, but is not properly managed here.
+				// This is an internal error.
+				String msg = "Non managed message type '" + type + "'";
+				if (subData != null) {
+					subData.onError(new GraphQLRequestExecutionException(msg));
+				} else {
+					logger.error(msg);
+				}
 		}
 	}
 
@@ -737,11 +749,6 @@ public class GraphQLReactiveWebSocketHandler implements WebSocketHandler {
 		}
 	}
 
-	@Override
-	public List<String> getSubProtocols() {
-		return SUB_PROTOCOL_LIST;
-	}
-
 	public WebSocketSession getSession() {
 		return session;
 	}
@@ -758,6 +765,26 @@ public class GraphQLReactiveWebSocketHandler implements WebSocketHandler {
 		}
 		if (payload != null) {
 			payloadMap.put("payload", payload);
+		}
+		try {
+			return objectMapper.writeValueAsString(payloadMap);
+		} catch (IOException ex) {
+			throw new RuntimeException("Failed to write " + payloadMap + " as JSON", ex);
+		}
+	}
+
+	/**
+	 * Encodes a message, according to the
+	 * <a href="https://docs.anycable.io/misc/action_cable_protocol">action-cable-ws protocol</a>
+	 */
+	String encode(MessageType messageType, @Nullable Object payload) {
+		Map<String, Object> payloadMap = new HashMap<>();
+		Map<String, Object> identifierMap = new HashMap<>();
+		identifierMap.put("channel", "GraphqlChannel");
+		payloadMap.put("identifier", identifierMap);
+		payloadMap.put("command", messageType.getType());
+		if (payload != null) {
+			payloadMap.put("data", payload);
 		}
 		try {
 			return objectMapper.writeValueAsString(payloadMap);

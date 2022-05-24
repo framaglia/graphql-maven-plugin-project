@@ -5,6 +5,7 @@ package com.graphql_java_generator.client;
 
 import java.util.Map;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.oauth2.client.web.reactive.function.client.ServerOAuth2AuthorizedClientExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
@@ -47,7 +48,7 @@ public class RequestExecutionGraphQLTransportWSImpl extends RequestExecutionSpri
 
 		////////////////////////////////////////////////////////////////////////////////////////////////////////
 		// Step 2: Open a Web Socket if we don't have an already opened one
-		initWebSocketConnection(graphQLRequest.getGraphQLObjectMapper());
+		initWebSocketConnection(graphQLRequest.getGraphQLObjectMapper(), new HttpHeaders());
 
 		////////////////////////////////////////////////////////////////////////////////////////////////////////
 		// Step 3: returns the response

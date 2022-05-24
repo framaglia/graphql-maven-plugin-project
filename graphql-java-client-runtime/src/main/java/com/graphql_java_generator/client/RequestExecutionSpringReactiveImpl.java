@@ -6,9 +6,11 @@ package com.graphql_java_generator.client;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -160,16 +162,29 @@ public class RequestExecutionSpringReactiveImpl implements RequestExecution {
 
 		try {
 			Map<String, Object> map = graphQLRequest.buildRequestAsMap(parameters);
+			String jwtToken = (String) map.remove("auth");
+
 			jsonRequest = graphQLRequest.getGraphQLObjectMapper().writeValueAsString(map);
 
 			logger.trace(GRAPHQL_MARKER, "Executing GraphQL request: {}", jsonRequest);
 
-			JsonResponseWrapper responseJson = webClient//
-					.post()//
-					.contentType(MediaType.APPLICATION_JSON)//
-					.body(Mono.just(jsonRequest), String.class)//
-					.accept(MediaType.APPLICATION_JSON)//
-					.retrieve()//
+			WebClient.ResponseSpec bodySpec;
+			if (jwtToken != null) {
+				bodySpec = webClient.post()//
+						.header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtToken)
+						.contentType(MediaType.APPLICATION_JSON)//
+						.body(Mono.just(jsonRequest), String.class)//
+						.accept(MediaType.APPLICATION_JSON)//
+						.retrieve();
+			} else {
+				bodySpec = webClient.post()//
+						.contentType(MediaType.APPLICATION_JSON)//
+						.body(Mono.just(jsonRequest), String.class)//
+						.accept(MediaType.APPLICATION_JSON)//
+						.retrieve();
+			}
+
+			JsonResponseWrapper responseJson = bodySpec
 					.bodyToMono(JsonResponseWrapper.class)//
 					.block();
 
@@ -203,11 +218,18 @@ public class RequestExecutionSpringReactiveImpl implements RequestExecution {
 		}
 
 		Map<String, Object> request = graphQLRequest.buildRequestAsMap(parameters);
+		String jwtToken = (String) request.remove("auth");
+
+		HttpHeaders authHeader = new HttpHeaders();
+		if (jwtToken != null) {
+			authHeader.add(HttpHeaders.AUTHORIZATION, "Bearer " + jwtToken);
+		}
+
 		String subscriptionName = graphQLRequest.getSubscription().getFields().get(0).getName();
 
 		////////////////////////////////////////////////////////////////////////////////////////////////////////
 		// Step 2: Open a Web Socket if we don't have an already opened one
-		initWebSocketConnection(graphQLRequest.getGraphQLObjectMapper());
+		initWebSocketConnection(graphQLRequest.getGraphQLObjectMapper(), authHeader);
 
 		////////////////////////////////////////////////////////////////////////////////////////////////////////
 		// Step 3: start the asked subscription
@@ -246,12 +268,15 @@ public class RequestExecutionSpringReactiveImpl implements RequestExecution {
 	 * @param graphQLObjectMapper
 	 * @throws GraphQLRequestExecutionException
 	 */
-	protected synchronized void initWebSocketConnection(GraphQLObjectMapper graphQLObjectMapper)
+	protected synchronized void initWebSocketConnection(GraphQLObjectMapper graphQLObjectMapper,
+														HttpHeaders headers)
 			throws GraphQLRequestExecutionException {
 		if (webSocketHandler == null || webSocketHandler.session == null || !webSocketHandler.session.isOpen()) {
 			// Is there an OAuth authentication to handle?
-			HttpHeaders headers = new HttpHeaders();
-			if (serverOAuth2AuthorizedClientExchangeFilterFunction != null && oAuthTokenExtractor != null) {
+
+			if (serverOAuth2AuthorizedClientExchangeFilterFunction != null
+					&& oAuthTokenExtractor != null
+					&& headers.isEmpty()) {
 				String authorizationHeaderValue = oAuthTokenExtractor.getAuthorizationHeaderValue();
 				logger.debug("Got this OAuth token (authorization header value): {}", authorizationHeaderValue);
 				headers.add(OAuthTokenExtractor.AUTHORIZATION_HEADER_NAME, authorizationHeaderValue);

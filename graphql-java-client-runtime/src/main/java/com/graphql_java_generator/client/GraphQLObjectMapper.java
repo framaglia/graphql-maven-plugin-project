@@ -25,6 +25,7 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.deser.DeserializationProblemHandler;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -138,6 +139,7 @@ public class GraphQLObjectMapper {
 	public GraphQLObjectMapper(String graphQLObjectsPackage, Map<Class<?>, Map<String, Field>> aliasFields) {
 		objectMapper = new ObjectMapper();
 		objectMapper.addHandler(new GraphQLDeserializationProblemHandler());
+		objectMapper.configure(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS, false);
 
 		this.graphQLObjectsPackage = graphQLObjectsPackage;
 		this.aliasFields = aliasFields;
